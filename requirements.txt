@@ -1,0 +1,25 @@
+# MGD Task Scheduler Pro v4.0 - Gerekli Paketler
+# Author: Mustafa GÜNEŞDOĞDU (MGdizayn)
+
+# UI Framework
+customtkinter>=5.2.0
+
+# Drag & Drop desteği (Opsiyonel ama önerilir)
+tkinterdnd2>=0.3.0
+
+# Sistem tepsisi desteği
+pystray>=0.19.0
+Pillow>=10.0.0
+
+# Desktop bildirimleri (Opsiyonel)
+plyer>=2.1.0
+
+# HTTP istekleri (Telegram için)
+requests>=2.31.0
+
+# Not: Bu paketlerin çoğu pip ile kurulabilir:
+# pip install -r requirements.txt
+#
+# tkinterdnd2 için alternatif kurulum:
+# pip install tkinterdnd2-universal (veya)
+# https://github.com/pmgagne/tkinterdnd2 reposundan manuel kurulum
