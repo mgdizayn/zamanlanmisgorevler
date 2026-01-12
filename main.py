@@ -28,7 +28,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 from tkinter import filedialog
-import winreg
+try:
+    import winreg
+except ImportError:
+    winreg = None
 
 # CustomTkinter import
 import customtkinter as ctk
@@ -49,13 +52,14 @@ from utils import (
 )
 from task_history import TaskHistoryManager, TaskHistoryRecord
 from custom_dialogs import show_info, show_success, show_warning, show_error, ask_question, ask_input
+from task_repository import TaskRepository
 
 # Tray icon
 try:
     import pystray
     from PIL import Image, ImageDraw
     TRAY_AVAILABLE = True
-except ImportError:
+except Exception:
     TRAY_AVAILABLE = False
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -165,6 +169,9 @@ class MGDSchedulerApp(ctk.CTk):
         # Veri yolları (cleanup'tan ÖNCE tanımlanmalı!)
         self.db_path = Path(self.config.tasks_db)
         self.backup_dir = Path(self.config.backups_dir)
+
+        # Repository (Data Layer)
+        self.task_repo = TaskRepository(self.config.tasks_db)
 
         # Managers (cleanup'tan ÖNCE oluşturulmalı!)
         self.telegram = create_telegram_manager(self.config)
@@ -358,48 +365,30 @@ class MGDSchedulerApp(ctk.CTk):
     # ═══════════════════════════════════════════════════════════════════════════
     
     def load_tasks(self):
-        """JSON dosyasından görevleri yükle."""
-        data = FileManager.safe_read(self.db_path, 'json', [])
-        
-        # Varsayılan alanları ekle
-        for task in data:
-            task["status"] = "idle"
-            task.setdefault("paused", False)
-            task.setdefault("category", "Genel")
-            task.setdefault("priority", 3)
-            task.setdefault("run_count", 0)
-            task.setdefault("success_count", 0)
-            task.setdefault("fail_count", 0)
-            task.setdefault("max_retries", self.config.retry_max)
-            task.setdefault("retry_delay", self.config.retry_delay)
-            task.setdefault("current_retry", 0)
-            task.setdefault("last_error", "")
-            task.setdefault("telegram_notify", True)
-        
+        """JSON dosyasından görevleri yükle (Repository üzerinden)."""
+        data = self.task_repo.load_tasks(default_config=self.config)
         print(f"📋 {len(data)} görev yüklendi")
         return data
 
     def save_tasks(self):
-        """Güvenli kayıt."""
+        """Güvenli kayıt (Repository üzerinden)."""
         try:
-            FileManager.atomic_write(self.db_path, self.tasks, 'json')
-            
-            # Auto backup
-            if self.config.auto_backup:
-                self.create_backup()
+            self.task_repo.save_tasks(
+                self.tasks,
+                backup_enabled=self.config.auto_backup,
+                backup_dir=self.backup_dir,
+                keep_backups=self.config.backup_keep_count
+            )
         except Exception as e:
             print(f"❌ Kayıt hatası: {e}")
             self.log_to_report(f"!!! KAYIT HATASI: {e}")
 
     def create_backup(self):
         """Backup oluştur."""
-        backup_path = self.backup_dir / f"tasks_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        # Artık Repository tarafından yönetiliyor, ama geriye uyumluluk için wrapper bırakılabilir
         try:
-            import shutil
-            shutil.copy2(self.db_path, backup_path)
-            
-            # Eski backup'ları temizle
-            FileManager.cleanup_old_files(self.backup_dir, "tasks_backup_*.json", self.config.backup_keep_count)
+            # save_tasks içinde yapılıyor ama manuel tetiklemek istenirse:
+            self.task_repo.create_backup(self.backup_dir, self.config.backup_keep_count)
         except Exception as e:
             print(f"Backup error: {e}")
 
@@ -1239,6 +1228,10 @@ class MGDSchedulerApp(ctk.CTk):
 
     def toggle_startup(self):
         """Windows başlangıç kaydı."""
+        if not winreg:
+            self.log_to_report("⚠️ Windows dışı sistemlerde başlangıç ayarı desteklenmiyor.")
+            return
+
         key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
         app_name = "MGD_Scheduler"
         exe_path = f'"{sys.executable}" "{os.path.abspath(__file__)}"'
@@ -1262,6 +1255,9 @@ class MGDSchedulerApp(ctk.CTk):
 
     def check_startup_status(self):
         """Windows başlangıç durumunu kontrol et."""
+        if not winreg:
+            return
+
         try:
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_READ)
             try:
