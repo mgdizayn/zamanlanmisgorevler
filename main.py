@@ -41,6 +41,7 @@ except ImportError:
 
 # MGD Modules
 from config import AppConfig, TASK_CATEGORIES, TASK_PRIORITIES, TASK_STATUSES, FREQUENCY_TYPES
+from task_repository import TaskRepository
 from telegram_manager import TelegramManager, create_telegram_manager
 from utils import (
     FileManager, NotificationManager, DateTimeHelper, 
@@ -167,6 +168,7 @@ class MGDSchedulerApp(ctk.CTk):
         self.backup_dir = Path(self.config.backups_dir)
 
         # Managers (cleanup'tan ÖNCE oluşturulmalı!)
+        self.repo = TaskRepository(self.config)
         self.telegram = create_telegram_manager(self.config)
         self.history = TaskHistoryManager(self.config.history_dir)
 
@@ -359,49 +361,21 @@ class MGDSchedulerApp(ctk.CTk):
     
     def load_tasks(self):
         """JSON dosyasından görevleri yükle."""
-        data = FileManager.safe_read(self.db_path, 'json', [])
-        
-        # Varsayılan alanları ekle
-        for task in data:
-            task["status"] = "idle"
-            task.setdefault("paused", False)
-            task.setdefault("category", "Genel")
-            task.setdefault("priority", 3)
-            task.setdefault("run_count", 0)
-            task.setdefault("success_count", 0)
-            task.setdefault("fail_count", 0)
-            task.setdefault("max_retries", self.config.retry_max)
-            task.setdefault("retry_delay", self.config.retry_delay)
-            task.setdefault("current_retry", 0)
-            task.setdefault("last_error", "")
-            task.setdefault("telegram_notify", True)
-        
+        data = self.repo.load_tasks()
         print(f"📋 {len(data)} görev yüklendi")
         return data
 
     def save_tasks(self):
         """Güvenli kayıt."""
-        try:
-            FileManager.atomic_write(self.db_path, self.tasks, 'json')
-            
-            # Auto backup
-            if self.config.auto_backup:
-                self.create_backup()
-        except Exception as e:
-            print(f"❌ Kayıt hatası: {e}")
-            self.log_to_report(f"!!! KAYIT HATASI: {e}")
+        success, error_msg = self.repo.save_tasks(self.tasks)
+        if not success:
+            self.log_to_report(f"!!! KAYIT HATASI: {error_msg}")
 
     def create_backup(self):
         """Backup oluştur."""
-        backup_path = self.backup_dir / f"tasks_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        try:
-            import shutil
-            shutil.copy2(self.db_path, backup_path)
-            
-            # Eski backup'ları temizle
-            FileManager.cleanup_old_files(self.backup_dir, "tasks_backup_*.json", self.config.backup_keep_count)
-        except Exception as e:
-            print(f"Backup error: {e}")
+        success, error_msg = self.repo.create_backup()
+        if not success:
+            print(f"Backup error occurred: {error_msg}")
 
     def export_tasks(self):
         """Görevleri dışa aktar."""
@@ -412,8 +386,7 @@ class MGDSchedulerApp(ctk.CTk):
         )
         if file_path:
             try:
-                with open(file_path, "w", encoding="utf-8") as f:
-                    json.dump(self.tasks, f, indent=4, ensure_ascii=False)
+                self.repo.export_tasks_to_file(self.tasks, file_path)
                 show_success(self, "Başarılı", "✅ Görevler dışa aktarıldı!")
                 self.log_to_report(f"📤 Görevler dışa aktarıldı: {Path(file_path).name}")
             except Exception as e:
@@ -426,21 +399,16 @@ class MGDSchedulerApp(ctk.CTk):
         )
         if file_path:
             try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    imported = json.load(f)
+                new_tasks = self.repo.import_tasks_from_file(file_path, self.tasks)
                 
-                # Duplicate kontrolü
-                new_tasks = []
-                for task in imported:
-                    if not any(t['name'] == task['name'] for t in self.tasks):
-                        task['id'] = str(uuid4())  # Yeni ID ver
-                        new_tasks.append(task)
-                
-                self.tasks.extend(new_tasks)
-                self.save_tasks()
-                self.refresh_task_list()
-                show_success(self, "Başarılı", f"✅ {len(new_tasks)} görev içe aktarıldı!")
-                self.log_to_report(f"📥 {len(new_tasks)} görev içe aktarıldı")
+                if new_tasks:
+                    self.tasks.extend(new_tasks)
+                    self.save_tasks()
+                    self.refresh_task_list()
+                    show_success(self, "Başarılı", f"✅ {len(new_tasks)} görev içe aktarıldı!")
+                    self.log_to_report(f"📥 {len(new_tasks)} görev içe aktarıldı")
+                else:
+                    show_warning(self, "Bilgi", "İçe aktarılacak yeni görev bulunamadı.")
             except Exception as e:
                 show_error(self, "Hata", f"İçe aktarma başarısız:\n{e}")
 
